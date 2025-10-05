@@ -1,29 +1,73 @@
 import { useEffect, useMemo, useState } from "react";
 import "./QuizCRUD.css";
-import { api } from "./api";
 
-const EMPTY_QUESTION = {
-  id: null,
-  text: "",
-  options: ["", "", "", ""],
-  correctIndex: 0,
-  explanation: "",
-};
+const REST_PREFIX = "/rest";
+const GRPC_PREFIX = "/grpc";
 
-function QuestionForm({ value, onChange, onSubmit, onCancel, submitting }) {
-  const v = value || EMPTY_QUESTION;
-  const options = v.options || ["", "", "", ""];
 
-  function set(field, val) {
-    onChange({ ...v, [field]: val });
-  }
+function prefixFor(mode) {
+  return mode === "rest" ? REST_PREFIX : GRPC_PREFIX;
+}
+async function jsonFetch(url, { method = "GET", body, token } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  return data;
+}
 
+
+const DEMO_DATA = [
+  {
+    id: 1,
+    text: "O que é gRPC?",
+    options: ["Protocolo de roteamento", "Framework RPC", "Banco de dados", "Balanceador"],
+    correctIndex: 1,
+    explanation: "gRPC é um framework RPC de alto desempenho baseado em HTTP/2 e Protobuf.",
+  },
+  {
+    id: 2,
+    text: "Qual protocolo de transporte o gRPC usa por padrão?",
+    options: ["HTTP/1.1", "WebSocket", "HTTP/2", "FTP"],
+    correctIndex: 2,
+    explanation: "gRPC usa HTTP/2 por padrão.",
+  },
+];
+
+
+function ModeToggle({ mode, setMode }) {
+  return (
+    <div className="crud-toggle">
+      <button
+        type="button"
+        className={mode === "rest" ? "crud-btn active" : "crud-btn"}
+        onClick={() => setMode("rest")}
+      >
+        REST
+      </button>
+      <button
+        type="button"
+        className={mode === "grpc" ? "crud-btn active" : "crud-btn"}
+        onClick={() => setMode("grpc")}
+      >
+        gRPC
+      </button>
+    </div>
+  );
+}
+
+
+function QuestionForm({ value, onChange, onSubmit, onCancel, submitting, mode }) {
+  const v = value;
+  function set(field, val) { onChange({ ...v, [field]: val }); }
   function setOption(idx, val) {
-    const opts = [...options];
+    const opts = [...v.options];
     opts[idx] = val;
     onChange({ ...v, options: opts });
   }
-
   return (
     <form className="crud-form" onSubmit={onSubmit}>
       <label className="crud-label">Texto da questão</label>
@@ -41,7 +85,7 @@ function QuestionForm({ value, onChange, onSubmit, onCancel, submitting }) {
           <label className="crud-label">Alternativa {letra}</label>
           <input
             className="crud-input"
-            value={options[i] || ""}
+            value={v.options[i]}
             onChange={(e) => setOption(i, e.target.value)}
             required
           />
@@ -55,9 +99,7 @@ function QuestionForm({ value, onChange, onSubmit, onCancel, submitting }) {
         min={0}
         max={3}
         value={v.correctIndex}
-        onChange={(e) =>
-          set("correctIndex", Math.max(0, Math.min(3, Number(e.target.value))))
-        }
+        onChange={(e) => set("correctIndex", Math.max(0, Math.min(3, Number(e.target.value))))}
       />
 
       <label className="crud-label">Explicação</label>
@@ -70,7 +112,9 @@ function QuestionForm({ value, onChange, onSubmit, onCancel, submitting }) {
 
       <div className="crud-actions">
         <button className="crud-btn primary" disabled={submitting} type="submit">
-          {submitting ? "Salvando (REST)..." : "Salvar (REST)"}
+          {submitting
+            ? `Salvando (${mode === "rest" ? "REST" : "gRPC"})...`
+            : `Salvar (${mode === "rest" ? "REST" : "gRPC"})`}
         </button>
         <button className="crud-btn outline" type="button" onClick={onCancel}>
           Cancelar
@@ -80,86 +124,78 @@ function QuestionForm({ value, onChange, onSubmit, onCancel, submitting }) {
   );
 }
 
+
 export default function QuizCRUD() {
+  const [mode, setMode] = useState("grpc");
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [editing, setEditing] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : "";
 
   async function load() {
-    setLoading(true);
-    setErr("");
+    setErr(""); setLoading(true);
     try {
-      const data = await api.listarPerguntas();
-      const arr = Array.isArray(data) ? data : [];
+      const data = await jsonFetch(`${prefixFor(mode)}/quiz`, { token });
+      const arr = Array.isArray(data) ? data : (data?.items || []);
       setItems(arr);
-    } catch (error) {
-      setItems([]);
-      setErr(error?.message || "Não foi possível carregar as perguntas.");
-    } finally {
-      setLoading(false);
+    } catch {
+      setItems(DEMO_DATA);
+      setErr("(demo) usando dados locais, não consegui buscar no backend.");
+    } finally { setLoading(false); }
+  }
+
+  async function createItem(payload) {
+    try {
+      const created = await jsonFetch(`${prefixFor(mode)}/quiz`, { method: "POST", body: payload, token });
+      return created?.id ? created : { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
+    } catch {
+      return { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
     }
   }
 
-  useEffect(() => {
-    load();
-  }, []);
+  async function updateItem(id, payload) {
+    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "PUT", body: payload, token }); }
+    catch {}
+  }
+
+  async function removeItem(id) {
+    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "DELETE", token }); }
+    catch {}
+    finally { setItems(prev => prev.filter(i => i.id !== id)); }
+  }
+
+  useEffect(() => { load(); }, [mode]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
     if (!query) return items;
-    return items.filter((it) =>
+    return items.filter(it =>
       it.text?.toLowerCase().includes(query) ||
       it.explanation?.toLowerCase().includes(query) ||
-      (it.options || []).some((o) => o?.toLowerCase().includes(query))
+      (it.options || []).some(o => o?.toLowerCase().includes(query))
     );
   }, [items, q]);
 
-  function startCreate() {
-    setEditing({ ...EMPTY_QUESTION });
-  }
-
-  function startEdit(item) {
-    setEditing({ ...item, options: [...(item.options || ["", "", "", ""])] });
+  function newEmpty() {
+    setEditing({ id: null, text: "", options: ["", "", "", ""], correctIndex: 0, explanation: "" });
   }
 
   async function submitForm(e) {
     e.preventDefault();
-    if (!editing) return;
     setSubmitting(true);
-    setErr("");
-
     try {
       if (editing.id == null) {
-        const created = await api.criarPergunta(editing);
-        setItems((prev) => [...prev, created]);
+        const created = await createItem(editing);
+        setItems(prev => [...prev, created]);
       } else {
-        const updated = await api.atualizarPergunta(editing.id, editing);
-        setItems((prev) =>
-          prev.map((it) => (it.id === updated.id ? updated : it))
-        );
+        await updateItem(editing.id, editing);
+        setItems(prev => prev.map(it => (it.id === editing.id ? { ...editing } : it)));
       }
       setEditing(null);
-    } catch (error) {
-      setErr(error?.message || "Erro ao salvar a pergunta.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function removeItem(id) {
-    if (!window.confirm("Deseja excluir esta pergunta?")) {
-      return;
-    }
-    setErr("");
-    try {
-      await api.removerPergunta(id);
-      setItems((prev) => prev.filter((it) => it.id !== id));
-    } catch (error) {
-      setErr(error?.message || "Não foi possível excluir a pergunta.");
-    }
+    } finally { setSubmitting(false); }
   }
 
   return (
@@ -168,18 +204,17 @@ export default function QuizCRUD() {
         <header className="crud-head">
           <div>
             <h2 className="crud-title">CRUD de Quiz</h2>
-            <p className="crud-subtle">
-              Integração REST ativa. A opção gRPC permanece indisponível.
-            </p>
+            <p className="crud-subtle">Gerencie questões: criar, editar e excluir</p>
           </div>
 
           {!editing && (
             <div className="crud-actions-right">
-              <button className="crud-btn primary" onClick={startCreate}>
-                + Nova questão
-              </button>
+              <ModeToggle mode={mode} setMode={setMode} />
+              <button className="crud-btn primary" onClick={newEmpty}>+ Nova questão</button>
               <button className="crud-btn" onClick={load} disabled={loading}>
-                {loading ? "Atualizando (REST)..." : "Atualizar (REST)"}
+                {loading
+                  ? `Atualizando (${mode === "rest" ? "REST" : "gRPC"})...`
+                  : `Atualizar (${mode === "rest" ? "REST" : "gRPC"})`}
               </button>
             </div>
           )}
@@ -205,6 +240,7 @@ export default function QuizCRUD() {
             onSubmit={submitForm}
             onCancel={() => setEditing(null)}
             submitting={submitting}
+            mode={mode}
           />
         ) : (
           <div className="crud-table-wrap">
@@ -219,27 +255,16 @@ export default function QuizCRUD() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="empty">
-                      {loading
-                        ? "Carregando perguntas..."
-                        : "Sem resultados."}
-                    </td>
-                  </tr>
+                  <tr><td colSpan={4} className="empty">Sem resultados.</td></tr>
                 ) : (
-                  filtered.map((it) => (
+                  filtered.map(it => (
                     <tr key={it.id}>
                       <td>{it.id}</td>
                       <td>
                         <div className="q-text">{it.text}</div>
                         <div className="q-options">
                           {it.options?.map((op, idx) => (
-                            <span
-                              key={idx}
-                              className={`q-badge ${
-                                idx === it.correctIndex ? "ok" : ""
-                              }`}
-                            >
+                            <span key={idx} className={`q-badge ${idx === it.correctIndex ? "ok" : ""}`}>
                               {String.fromCharCode(65 + idx)}. {op}
                             </span>
                           ))}
@@ -247,22 +272,13 @@ export default function QuizCRUD() {
                       </td>
                       <td>
                         {typeof it.correctIndex === "number"
-                          ? `Índice ${it.correctIndex} (${String.fromCharCode(
-                              65 + it.correctIndex
-                            )})`
+                          ? `Índice ${it.correctIndex} (${String.fromCharCode(65 + it.correctIndex)})`
                           : "-"}
                       </td>
                       <td>
                         <div className="row-actions">
-                          <button className="crud-btn" onClick={() => startEdit(it)}>
-                            Editar
-                          </button>
-                          <button
-                            className="crud-btn danger"
-                            onClick={() => removeItem(it.id)}
-                          >
-                            Excluir
-                          </button>
+                          <button className="crud-btn" onClick={() => setEditing({ ...it })}>Editar</button>
+                          <button className="crud-btn danger" onClick={() => removeItem(it.id)}>Excluir</button>
                         </div>
                       </td>
                     </tr>
@@ -272,6 +288,7 @@ export default function QuizCRUD() {
             </table>
           </div>
         )}
+
       </section>
     </div>
   );

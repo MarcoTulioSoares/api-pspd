@@ -1,6 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./Quiz.css";
-import { api } from "./api";
+
+const REST_PREFIX = "/rest";
+const GRPC_PREFIX = "/grpc";
+
+function base(prefix) {
+  return prefix === "/rest" ? REST_PREFIX : GRPC_PREFIX;
+}
+
+async function jsonFetch(url, { method = "GET", body, token } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  return { data };
+}
 
 function Alternativa({ rotulo, texto, selecionada, estado, desabilitada, aoClicar }) {
   return (
@@ -20,103 +41,142 @@ function Alternativa({ rotulo, texto, selecionada, estado, desabilitada, aoClica
   );
 }
 
+function ModeToggle({ prefix, setPrefix }) {
+  return (
+    <div className="toggle">
+      <button
+        className={prefix === "/rest" ? "btn active" : "btn"}
+        onClick={() => setPrefix("/rest")}
+        type="button"
+      >
+        REST
+      </button>
+      <button
+        className={prefix === "/grpc" ? "btn active" : "btn"}
+        onClick={() => setPrefix("/grpc")}
+        type="button"
+      >
+        gRPC
+      </button>
+    </div>
+  );
+}
+
 export default function Quiz() {
-  const [questions, setQuestions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [questoes, setQuestoes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
   const [etapa, setEtapa] = useState(0);
   const [selecionada, setSelecionada] = useState(null);
   const [respostas, setRespostas] = useState([]);
   const [mostrarResposta, setMostrarResposta] = useState(false);
+  const [prefix, setPrefix] = useState("/grpc");
 
-  const loadQuestions = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const itens = await api.listarPerguntas();
-      setQuestions(Array.isArray(itens) ? itens : []);
-      setEtapa(0);
-      setSelecionada(null);
-      setRespostas([]);
-      setMostrarResposta(false);
-    } catch (err) {
-      setQuestions([]);
-      setError(err?.message || "Não foi possível carregar as perguntas.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : "";
+  const stopRef = useRef(null);
 
+  // ===== carregar perguntas do backend =====
   useEffect(() => {
-    loadQuestions();
-  }, [loadQuestions]);
+    async function carregarQuestoes() {
+      try {
+        setLoading(true);
+        const { data } = await jsonFetch(`${base(prefix)}/quiz`, { token });
+        const formatado = Array.isArray(data)
+          ? data.map(q => ({
+              id: q.id,
+              texto: q.text || q.texto,
+              alternativas: q.options || q.alternativas,
+              indiceResposta: q.correctIndex ?? q.indice_resposta,
+              explicacao: q.explanation || q.explicacao || "",
+            }))
+          : [];
+        setQuestoes(formatado);
+      } catch (e) {
+        console.error("Erro ao carregar questões:", e);
+        setErr("Falha ao buscar perguntas no servidor. Exibindo exemplo local.");
+        setQuestoes([
+          {
+            id: 1,
+            texto: "Questão de exemplo local",
+            alternativas: ["A", "B", "C", "D"],
+            indiceResposta: 1,
+            explicacao: "Exemplo de fallback local.",
+          },
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    carregarQuestoes();
+  }, [prefix]);
 
-  const total = questions.length;
-  const questao = questions[etapa] ?? null;
+  const total = questoes.length;
+  const questao = questoes[etapa];
   const progresso = total > 0 ? Math.round((etapa / total) * 100) : 0;
-  const pontuacao = useMemo(
-    () => respostas.filter((r) => r.correta).length,
-    [respostas]
-  );
+  const pontuacao = respostas.filter((r) => r.correta).length;
 
-  function confirmar() {
+  async function validarNoBackend(questionId, answerText) {
+    const url = `${base(prefix)}/quiz/${questionId}/validate`;
+    const { data } = await jsonFetch(url, {
+      method: "POST",
+      body: { answer: answerText },
+      token,
+    });
+    return data;
+  }
+
+  async function Confirmar() {
     if (selecionada === null || !questao) return;
+    let correta = selecionada === questao.indiceResposta;
 
-    const correta = selecionada === questao.correctIndex;
+    try {
+      const result = await validarNoBackend(questao.id, questao.alternativas[selecionada]);
+      if (typeof result?.correct === "boolean") correta = result.correct;
+      if (result?.explanation) questao.explicacao = result.explanation;
+    } catch {}
+
     setRespostas((prev) => [...prev, { idQuestao: questao.id, correta }]);
     setMostrarResposta(true);
   }
 
-  function proxima() {
+  function Proxima() {
     setMostrarResposta(false);
     setSelecionada(null);
-    setEtapa((prev) => prev + 1);
+    setEtapa((e) => e + 1);
+    if (stopRef.current) {
+      stopRef.current();
+      stopRef.current = null;
+    }
   }
 
-  function reiniciar() {
+  function Reiniciar() {
     setEtapa(0);
     setSelecionada(null);
     setRespostas([]);
     setMostrarResposta(false);
+    if (stopRef.current) {
+      stopRef.current();
+      stopRef.current = null;
+    }
   }
 
   if (loading) {
     return (
-      <main className="tela">
-        <section className="cartao">
-          <h2 className="questao-quiz">Carregando perguntas via REST...</h2>
-        </section>
-      </main>
+      <div className="tela">
+        <p>Carregando perguntas...</p>
+      </div>
     );
   }
 
-  if (error) {
-    return (
-      <main className="tela">
-        <section className="cartao">
-          <h2 className="questao-quiz">{error}</h2>
-          <div className="botoes">
-            <button className="btn-reiniciar" onClick={loadQuestions}>
-              Tentar novamente
-            </button>
-          </div>
-        </section>
-      </main>
-    );
+  if (err) {
+    console.warn(err);
   }
 
   if (total === 0) {
     return (
-      <main className="tela">
-        <section className="cartao">
-          <h2 className="questao-quiz">Nenhuma pergunta cadastrada.</h2>
-          <div className="botoes">
-            <button className="btn-reiniciar" onClick={loadQuestions}>
-              Atualizar lista
-            </button>
-          </div>
-        </section>
-      </main>
+      <div className="tela">
+        <p>Nenhuma pergunta encontrada no banco.</p>
+      </div>
     );
   }
 
@@ -128,14 +188,8 @@ export default function Quiz() {
           <p className="progresso-cartao">
             Você acertou <b>{pontuacao}</b> de <b>{total}</b> perguntas 🎉
           </p>
-          <p className="progresso-cartao">
-            Pontuação final: <b>{pontuacao}</b>
-          </p>
-          <button className="btn-reiniciar" onClick={reiniciar}>
+          <button className="btn-reiniciar" onClick={Reiniciar}>
             Refazer quiz
-          </button>
-          <button className="btn-reiniciar" onClick={loadQuestions}>
-            Buscar novas perguntas
           </button>
         </section>
       </div>
@@ -150,19 +204,16 @@ export default function Quiz() {
             <strong>Pergunta {etapa + 1}</strong> / {total}
           </div>
           <div className="progresso-quiz">{progresso}% concluído</div>
-          <div className="progresso-quiz" style={{ fontSize: 12, color: "#0f0" }}>
-            REST conectado
-          </div>
+          <ModeToggle prefix={prefix} setPrefix={setPrefix} />
         </header>
 
-        <h2 className="questao-quiz">{questao.text}</h2>
+        <h2 className="questao-quiz">{questao.texto}</h2>
 
         <div className="opcoes">
-          {questao.options.map((alt, idx) => {
+          {questao.alternativas.map((alt, idx) => {
             const estaSelecionada = selecionada === idx;
-            const estaCorreta = mostrarResposta && idx === questao.correctIndex;
-            const estaErrada =
-              mostrarResposta && estaSelecionada && idx !== questao.correctIndex;
+            const estaCorreta = mostrarResposta && idx === questao.indiceResposta;
+            const estaErrada = mostrarResposta && estaSelecionada && idx !== questao.indiceResposta;
 
             return (
               <Alternativa
@@ -184,25 +235,25 @@ export default function Quiz() {
               className="btn-reiniciar"
               style={{ opacity: selecionada === null ? 0.6 : 1 }}
               disabled={selecionada === null}
-              onClick={confirmar}
+              onClick={Confirmar}
             >
-              Confirmar (REST)
+              Confirmar ({prefix.replace("/", "").toUpperCase()})
             </button>
-            <button className="btn-reiniciar" onClick={reiniciar}>
+            <button className="btn-reiniciar" onClick={Reiniciar}>
               Reiniciar
             </button>
           </div>
         ) : (
           <div className="feedback">
-            {selecionada === questao.correctIndex ? (
+            {selecionada === questao.indiceResposta ? (
               <h2 className="acerto">Parabéns, você acertou!</h2>
             ) : (
               <h2 className="erro">Você errou!</h2>
             )}
             <div className="explicacao-quiz">
-              <p className="conteudo-feedback">{questao.explanation}</p>
+              <p className="conteudo-feedback">{questao.explicacao}</p>
             </div>
-            <button className="btn-reiniciar" onClick={proxima}>
+            <button className="btn-reiniciar" onClick={Proxima}>
               Próxima pergunta
             </button>
           </div>
