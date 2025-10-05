@@ -1,54 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./Quiz.css";
-
-const REST_PREFIX = "/rest";
-const GRPC_PREFIX = "/grpc";
-
-const QUESTOES = [
-  {
-    id: 1,
-    texto: "Questão 1 exemplo",
-    alternativas: ["A", "B", "C", "D"],
-    indiceResposta: 1,
-    explicacao: "Explicação da questão 1",
-  },
-  {
-    id: 2,
-    texto: "Questão 2 exemplo",
-    alternativas: ["E", "F", "G", "H"],
-    indiceResposta: 2,
-    explicacao: "Explicação da questão 2",
-  },
-];
-
-function base(prefix) {
-  return prefix === "/rest" ? REST_PREFIX : GRPC_PREFIX;
-}
-
-async function jsonFetch(url, { method = "GET", body, token } = {}) {
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
-  return { data };
-}
-
-function listenSSE(url, onData) {
-  const es = new EventSource(url);
-  es.onmessage = (ev) => {
-    try { onData(JSON.parse(ev.data)); }
-    catch { onData(ev.data); }
-  };
-  es.onerror = () => es.close();
-  return () => es.close();
-}
+import { api } from "./api";
 
 function Alternativa({ rotulo, texto, selecionada, estado, desabilitada, aoClicar }) {
   return (
@@ -68,93 +20,105 @@ function Alternativa({ rotulo, texto, selecionada, estado, desabilitada, aoClica
   );
 }
 
-function ModeToggle({ prefix, setPrefix }) {
-  return (
-    <div className="toggle">
-      <button
-        className={prefix === "/rest" ? "btn active" : "btn"}
-        onClick={() => setPrefix("/rest")}
-        type="button"
-      >
-        REST
-      </button>
-      <button
-        className={prefix === "/grpc" ? "btn active" : "btn"}
-        onClick={() => setPrefix("/grpc")}
-        type="button"
-      >
-        gRPC
-      </button>
-    </div>
-  );
-}
-
 export default function Quiz() {
+  const [questions, setQuestions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [etapa, setEtapa] = useState(0);
   const [selecionada, setSelecionada] = useState(null);
   const [respostas, setRespostas] = useState([]);
   const [mostrarResposta, setMostrarResposta] = useState(false);
 
-  const [prefix, setPrefix] = useState("/grpc");
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : "";
-
-  const [hints, setHints] = useState([]);
-  const stopRef = useRef(null);
-
-  const total = QUESTOES.length;
-  const questao = QUESTOES[etapa];
-  const progresso = Math.round((etapa / total) * 100);
-  const pontuacao = respostas.filter((r) => r.correta).length;
-
-  async function validarNoBackend(questionId, answerText) {
-    const url = `${base(prefix)}/quiz/${questionId}/validate`;
-    const { data } = await jsonFetch(url, {
-      method: "POST",
-      body: { answer: answerText },
-      token,
-    });
-    return data;
-  }
-
-  async function Confirmar() {
-    if (selecionada === null) return;
-    let correta = selecionada === questao.indiceResposta;
-
+  const loadQuestions = useCallback(async () => {
+    setLoading(true);
+    setError("");
     try {
-      const result = await validarNoBackend(questao.id, questao.alternativas[selecionada]);
-      if (typeof result?.correct === "boolean") correta = result.correct;
-      if (result?.explanation) questao.explicacao = result.explanation;
-    } catch {}
+      const itens = await api.listarPerguntas();
+      setQuestions(Array.isArray(itens) ? itens : []);
+      setEtapa(0);
+      setSelecionada(null);
+      setRespostas([]);
+      setMostrarResposta(false);
+    } catch (err) {
+      setQuestions([]);
+      setError(err?.message || "Não foi possível carregar as perguntas.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
+  useEffect(() => {
+    loadQuestions();
+  }, [loadQuestions]);
+
+  const total = questions.length;
+  const questao = questions[etapa] ?? null;
+  const progresso = total > 0 ? Math.round((etapa / total) * 100) : 0;
+  const pontuacao = useMemo(
+    () => respostas.filter((r) => r.correta).length,
+    [respostas]
+  );
+
+  function confirmar() {
+    if (selecionada === null || !questao) return;
+
+    const correta = selecionada === questao.correctIndex;
     setRespostas((prev) => [...prev, { idQuestao: questao.id, correta }]);
     setMostrarResposta(true);
   }
 
-  function Proxima() {
+  function proxima() {
     setMostrarResposta(false);
     setSelecionada(null);
-    setEtapa((e) => e + 1);
-    pararHints();
-    setHints([]);
+    setEtapa((prev) => prev + 1);
   }
 
-  function Reiniciar() {
+  function reiniciar() {
     setEtapa(0);
     setSelecionada(null);
     setRespostas([]);
     setMostrarResposta(false);
-    pararHints();
-    setHints([]);
   }
 
-  function pararHints() {
-    if (stopRef.current) {
-      stopRef.current();
-      stopRef.current = null;
-    }
+  if (loading) {
+    return (
+      <main className="tela">
+        <section className="cartao">
+          <h2 className="questao-quiz">Carregando perguntas via REST...</h2>
+        </section>
+      </main>
+    );
   }
 
-  useEffect(() => () => pararHints(), []);
+  if (error) {
+    return (
+      <main className="tela">
+        <section className="cartao">
+          <h2 className="questao-quiz">{error}</h2>
+          <div className="botoes">
+            <button className="btn-reiniciar" onClick={loadQuestions}>
+              Tentar novamente
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (total === 0) {
+    return (
+      <main className="tela">
+        <section className="cartao">
+          <h2 className="questao-quiz">Nenhuma pergunta cadastrada.</h2>
+          <div className="botoes">
+            <button className="btn-reiniciar" onClick={loadQuestions}>
+              Atualizar lista
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   if (etapa >= total) {
     return (
@@ -164,11 +128,14 @@ export default function Quiz() {
           <p className="progresso-cartao">
             Você acertou <b>{pontuacao}</b> de <b>{total}</b> perguntas 🎉
           </p>
-                    <p className="progresso-cartao">
+          <p className="progresso-cartao">
             Pontuação final: <b>{pontuacao}</b>
           </p>
-          <button className="btn-reiniciar" onClick={Reiniciar}>
+          <button className="btn-reiniciar" onClick={reiniciar}>
             Refazer quiz
+          </button>
+          <button className="btn-reiniciar" onClick={loadQuestions}>
+            Buscar novas perguntas
           </button>
         </section>
       </div>
@@ -183,16 +150,19 @@ export default function Quiz() {
             <strong>Pergunta {etapa + 1}</strong> / {total}
           </div>
           <div className="progresso-quiz">{progresso}% concluído</div>
-          <ModeToggle prefix={prefix} setPrefix={setPrefix} />
+          <div className="progresso-quiz" style={{ fontSize: 12, color: "#0f0" }}>
+            REST conectado
+          </div>
         </header>
 
-        <h2 className="questao-quiz">{questao.texto}</h2>
+        <h2 className="questao-quiz">{questao.text}</h2>
 
         <div className="opcoes">
-          {questao.alternativas.map((alt, idx) => {
+          {questao.options.map((alt, idx) => {
             const estaSelecionada = selecionada === idx;
-            const estaCorreta = mostrarResposta && idx === questao.indiceResposta;
-            const estaErrada = mostrarResposta && estaSelecionada && idx !== questao.indiceResposta;
+            const estaCorreta = mostrarResposta && idx === questao.correctIndex;
+            const estaErrada =
+              mostrarResposta && estaSelecionada && idx !== questao.correctIndex;
 
             return (
               <Alternativa
@@ -214,33 +184,30 @@ export default function Quiz() {
               className="btn-reiniciar"
               style={{ opacity: selecionada === null ? 0.6 : 1 }}
               disabled={selecionada === null}
-              onClick={Confirmar}
+              onClick={confirmar}
             >
-              Confirmar ({prefix.replace("/", "").toUpperCase()})
+              Confirmar (REST)
             </button>
-            <button className="btn-reiniciar" onClick={Reiniciar}>
+            <button className="btn-reiniciar" onClick={reiniciar}>
               Reiniciar
             </button>
-
           </div>
         ) : (
           <div className="feedback">
-            {selecionada === questao.indiceResposta ? (
+            {selecionada === questao.correctIndex ? (
               <h2 className="acerto">Parabéns, você acertou!</h2>
             ) : (
               <h2 className="erro">Você errou!</h2>
             )}
             <div className="explicacao-quiz">
-              <p className="conteudo-feedback">{questao.explicacao}</p>
+              <p className="conteudo-feedback">{questao.explanation}</p>
             </div>
-            <button className="btn-reiniciar" onClick={Proxima}>
+            <button className="btn-reiniciar" onClick={proxima}>
               Próxima pergunta
             </button>
           </div>
         )}
       </section>
-
-
     </main>
   );
 }
