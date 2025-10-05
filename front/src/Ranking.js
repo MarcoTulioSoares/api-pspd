@@ -1,19 +1,6 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "./api";
 import "./Ranking.css";
-
-
-const DEMO_ROWS = [
-  { user: "Maria", score: 980 },
-  { user: "Gabriel", score: 960 },
-  { user: "Ana", score: 930 },
-  { user: "João", score: 890 },
-  { user: "Carla", score: 870 },
-  { user: "Rafa", score: 850 },
-  { user: "Luiza", score: 830 },
-  { user: "Pedro", score: 820 },
-  { user: "Felipe", score: 810 },
-  { user: "Bianca", score: 800 },
-];
 
 function positionDecor(pos) {
   if (pos === 1) return { icon: "🏆", cls: "gold" };
@@ -28,12 +15,37 @@ function PositionBadge({ pos }) {
 }
 
 export default function Ranking() {
+  const [usuarios, setUsuarios] = useState([]);
+  const [erro, setErro] = useState("");
+
+  useEffect(() => {
+    async function carregar() {
+      setErro("");
+      try {
+        const data = await api.listarUsuarios();
+        const normalizados = Array.isArray(data)
+          ? data.map((u) => ({
+              user: u?.email || "Usuário",
+              score: u?.pontuacao ?? 0,
+            }))
+          : [];
+        setUsuarios(normalizados);
+      } catch (e) {
+        setErro(e.message || "Não foi possível carregar o ranking.");
+        setUsuarios([]);
+      }
+    }
+
+    carregar();
+  }, []);
+
   const rows = useMemo(
     () =>
-      [...DEMO_ROWS]
+      [...usuarios]
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, 10)
         .map((r, i) => ({ ...r, pos: i + 1 })),
-    []
+    [usuarios]
   );
 
   return (
@@ -42,6 +54,8 @@ export default function Ranking() {
         <header className="rk-head">
           <h2 className="rk-title">Ranking • Top 10</h2>
         </header>
+
+        {erro && <div className="rk-error">{erro}</div>}
 
         <div className="rk-table-wrap scrollable">
           <table className="rk-table compact">

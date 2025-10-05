@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
+import { api } from "./api";
 import "./Login.css";
 
 export default function Login() {
@@ -12,24 +13,29 @@ export default function Login() {
   const location = useLocation();
   const next = location.state?.from?.pathname || "/quiz";
 
-  function doLogin(mode) {
-    setErr(""); setOk("");
+  async function doLogin(mode) {
+    setErr("");
+    setOk("");
 
     if (!email || !password) {
       setErr("Digite email e senha.");
       return;
     }
 
-    
-    localStorage.setItem("token", "demo-token");
-  localStorage.setItem("apiMode", mode);              
-    localStorage.setItem("basePrefix", mode === "grpc" ? "/grpc" : "/rest");
+    try {
+      const usuario = await api.login(email, password);
 
-    const guessedName = email.split("@")[0] || "Aluno(a)";
-    localStorage.setItem("userName", guessedName);
+      localStorage.setItem("token", String(usuario?.codigoUsuario ?? ""));
+      localStorage.setItem("apiMode", mode);
+      localStorage.setItem("basePrefix", "/rest");
+      localStorage.setItem("userName", usuario?.email?.split("@")?.[0] || "Aluno(a)");
+      localStorage.setItem("userId", String(usuario?.codigoUsuario ?? ""));
 
-    setOk(`Login realizado via ${mode.toUpperCase()}!`);
-    setTimeout(() => navigate(next, { replace: true }), 500);
+      setOk("Login realizado com sucesso!");
+      setTimeout(() => navigate(next, { replace: true }), 500);
+    } catch (error) {
+      setErr(error.message || "Não foi possível realizar o login.");
+    }
   }
 
   return (
