@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import "./Quiz.css";
 
-const REST_PREFIX = "/rest";
+const REST_API_BASE = "http://localhost:8080/api";
+const REST_QUIZ_ENDPOINT = `${REST_API_BASE}/pergunta`;
 const GRPC_PREFIX = "/grpc";
-
-function base(prefix) {
-  return prefix === "/rest" ? REST_PREFIX : GRPC_PREFIX;
-}
+const GRPC_QUIZ_ENDPOINT = `${GRPC_PREFIX}/quiz`;
 
 async function jsonFetch(url, { method = "GET", body, token } = {}) {
   const headers = { "Content-Type": "application/json" };
@@ -80,13 +78,26 @@ export default function Quiz() {
     async function carregarQuestoes() {
       try {
         setLoading(true);
-        const { data } = await jsonFetch(`${base(prefix)}/quiz`, { token });
+        const quizEndpoint = prefix === "/rest" ? REST_QUIZ_ENDPOINT : GRPC_QUIZ_ENDPOINT;
+        const { data } = await jsonFetch(quizEndpoint, { token });
         const formatado = Array.isArray(data)
           ? data.map(q => ({
-              id: q.id,
-              texto: q.text || q.texto,
-              alternativas: q.options || q.alternativas,
-              indiceResposta: q.correctIndex ?? q.indice_resposta,
+              id: q.id ?? q.codigoPergunta ?? q.codigo_pergunta,
+              texto: q.text || q.texto || q.pergunta,
+              alternativas: (() => {
+                const opts =
+                  q.options ||
+                  q.alternativas ||
+                  [q.q1, q.q2, q.q3, q.q4].filter((opt) => opt !== undefined && opt !== null);
+                const preenchidas = Array.isArray(opts) ? [...opts] : [];
+                while (preenchidas.length < 4) preenchidas.push("");
+                return preenchidas.slice(0, 4);
+              })(),
+              indiceResposta:
+                q.correctIndex ??
+                q.indice_resposta ??
+                q.indiceResposta ??
+                0,
               explicacao: q.explanation || q.explicacao || "",
             }))
           : [];
@@ -108,7 +119,7 @@ export default function Quiz() {
       }
     }
     carregarQuestoes();
-  }, [prefix]);
+  }, [prefix, token]);
 
   const total = questoes.length;
   const questao = questoes[etapa];
@@ -116,7 +127,10 @@ export default function Quiz() {
   const pontuacao = respostas.filter((r) => r.correta).length;
 
   async function validarNoBackend(questionId, answerText) {
-    const url = `${base(prefix)}/quiz/${questionId}/validate`;
+    if (prefix === "/rest") {
+      return {};
+    }
+    const url = `${GRPC_QUIZ_ENDPOINT}/${questionId}/validate`;
     const { data } = await jsonFetch(url, {
       method: "POST",
       body: { answer: answerText },
