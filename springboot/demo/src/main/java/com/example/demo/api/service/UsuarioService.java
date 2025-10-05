@@ -1,5 +1,6 @@
 package com.example.demo.api.service;
 
+import com.example.demo.api.dto.LoginRequestDTO;
 import com.example.demo.api.dto.UsuarioDTO;
 import com.example.demo.api.model.UsuarioEntity;
 import com.example.demo.api.repository.UsuarioRepository;
@@ -57,6 +58,14 @@ public class UsuarioService {
         }
 
         usuarioRepository.deleteById(id);
+    }
+
+    @Transactional(readOnly = true)
+    public UsuarioDTO autenticar(LoginRequestDTO loginRequest) {
+        UsuarioEntity usuario = usuarioRepository.findByEmailAndSenha(loginRequest.getEmail(), loginRequest.getSenha())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Credenciais inválidas"));
+
+        return mapearParaDTO(usuario);
     }
 
     private UsuarioDTO mapearParaDTO(UsuarioEntity entity) {

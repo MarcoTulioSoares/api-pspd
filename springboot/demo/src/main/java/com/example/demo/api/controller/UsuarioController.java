@@ -1,5 +1,6 @@
 package com.example.demo.api.controller;
 
+import com.example.demo.api.dto.LoginRequestDTO;
 import com.example.demo.api.dto.UsuarioDTO;
 import com.example.demo.api.service.UsuarioService;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,11 @@ public class UsuarioController {
     public ResponseEntity<UsuarioDTO> criar(@RequestBody UsuarioDTO usuarioDTO) {
         UsuarioDTO criado = usuarioService.criar(usuarioDTO);
         return ResponseEntity.status(HttpStatus.CREATED).body(criado);
+    }
+
+    @PostMapping("/login")
+    public ResponseEntity<UsuarioDTO> login(@RequestBody LoginRequestDTO loginRequest) {
+        return ResponseEntity.ok(usuarioService.autenticar(loginRequest));
     }
 
     @PutMapping("/{id}")
