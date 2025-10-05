@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import "./Login.css"; 
+import "./Login.css";
 
+const REST_API_BASE = "http://localhost:8080/api";
+const REST_REGISTER_ENDPOINT = `${REST_API_BASE}/usuario`;
 
 async function jsonPost(url, body) {
   const res = await fetch(url, {
@@ -38,33 +40,43 @@ export default function Cadastro() {
       return;
     }
 
-    
-    const prefix = mode === "grpc" ? "/grpc" : "/rest";
+    const isGrpc = mode === "grpc";
+    const registerUrl = isGrpc ? "/grpc/auth/register" : REST_REGISTER_ENDPOINT;
 
     try {
-      
-      
-      await jsonPost(`${prefix}/auth/register`, {
-        name,
-        email: emailReg,
-        password: passReg,
-      });
+      if (isGrpc) {
+        await jsonPost(registerUrl, {
+          name,
+          email: emailReg,
+          password: passReg,
+        });
+      } else {
+        await jsonPost(registerUrl, {
+          email: emailReg,
+          senha: passReg,
+          pontuacao: 0,
+        });
+      }
 
-      
-  localStorage.setItem("apiMode", mode);            
-      localStorage.setItem("basePrefix", prefix);
+      localStorage.setItem("apiMode", mode);
+      localStorage.setItem("basePrefix", isGrpc ? "/grpc" : REST_API_BASE);
       localStorage.setItem("demoUser", JSON.stringify({ name, email: emailReg }));
 
       setOk(`Conta criada com sucesso via ${mode.toUpperCase()}!`);
       setTimeout(() => navigate("/login", { replace: true }), 900);
     } catch (e) {
-      
-      localStorage.setItem("apiMode", mode);
-      localStorage.setItem("basePrefix", prefix);
-      localStorage.setItem("demoUser", JSON.stringify({ name, email: emailReg }));
+      if (isGrpc) {
+        localStorage.setItem("apiMode", mode);
+        localStorage.setItem("basePrefix", "/grpc");
+        localStorage.setItem("demoUser", JSON.stringify({ name, email: emailReg }));
 
-      setOk(`Conta criada (demo) via ${mode.toUpperCase()}.`);
-      setTimeout(() => navigate("/login", { replace: true }), 900);
+        setOk(`Conta criada (demo) via ${mode.toUpperCase()}.`);
+        setTimeout(() => navigate("/login", { replace: true }), 900);
+        return;
+      }
+
+      const message = e instanceof Error ? e.message : "Não foi possível criar a conta via REST.";
+      setErr(message || "Não foi possível criar a conta via REST.");
     }
   }
 

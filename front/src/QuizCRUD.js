@@ -1,12 +1,61 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "./QuizCRUD.css";
 
-const REST_PREFIX = "/rest";
+const REST_API_BASE = "http://localhost:8080/api";
+const REST_QUIZ_ENDPOINT = `${REST_API_BASE}/pergunta`;
 const GRPC_PREFIX = "/grpc";
+const GRPC_QUIZ_ENDPOINT = `${GRPC_PREFIX}/quiz`;
 
+function ensureOptionsArray(options = []) {
+  const arr = Array.isArray(options) ? [...options] : [];
+  while (arr.length < 4) arr.push("");
+  return arr.slice(0, 4);
+}
 
-function prefixFor(mode) {
-  return mode === "rest" ? REST_PREFIX : GRPC_PREFIX;
+function normalizeQuestion(item) {
+  if (!item) return null;
+  const id = item.id ?? item.codigoPergunta ?? item.codigo_pergunta ?? null;
+  const text = item.text ?? item.texto ?? item.pergunta ?? "";
+  const rawOptions =
+    item.options ??
+    item.alternativas ??
+    [item.q1, item.q2, item.q3, item.q4].filter((opt) => opt !== undefined && opt !== null);
+  const options = ensureOptionsArray(rawOptions);
+  const correctIndex =
+    item.correctIndex ??
+    item.indice_resposta ??
+    item.indiceResposta ??
+    0;
+  const explanation = item.explanation ?? item.explicacao ?? "";
+  return { id, text, options, correctIndex, explanation };
+}
+
+function toRestPayload(question) {
+  const normalized = normalizeQuestion(question) || {
+    id: null,
+    text: "",
+    options: ["", "", "", ""],
+    correctIndex: 0,
+    explanation: "",
+  };
+  return {
+    codigoPergunta: normalized.id,
+    pergunta: normalized.text,
+    q1: normalized.options[0] ?? "",
+    q2: normalized.options[1] ?? "",
+    q3: normalized.options[2] ?? "",
+    q4: normalized.options[3] ?? "",
+    explicacao: normalized.explanation ?? "",
+    indiceResposta: normalized.correctIndex ?? 0,
+  };
+}
+
+function listEndpointFor(mode) {
+  return mode === "rest" ? REST_QUIZ_ENDPOINT : GRPC_QUIZ_ENDPOINT;
+}
+
+function itemEndpointFor(mode, id) {
+  return mode === "rest" ? `${REST_QUIZ_ENDPOINT}/${id}` : `${GRPC_QUIZ_ENDPOINT}/${id}`;
 }
 async function jsonFetch(url, { method = "GET", body, token } = {}) {
   const headers = { "Content-Type": "application/json" };
@@ -135,39 +184,59 @@ export default function QuizCRUD() {
   const [submitting, setSubmitting] = useState(false);
   const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : "";
 
-  async function load() {
+  const load = useCallback(async () => {
     setErr(""); setLoading(true);
     try {
-      const data = await jsonFetch(`${prefixFor(mode)}/quiz`, { token });
-      const arr = Array.isArray(data) ? data : (data?.items || []);
-      setItems(arr);
+      const data = await jsonFetch(listEndpointFor(mode), { token });
+      const arr = Array.isArray(data) ? data : data?.items || [];
+      const normalizados = arr
+        .map((it) => normalizeQuestion(it))
+        .filter((it) => it != null);
+      setItems(normalizados);
     } catch {
       setItems(DEMO_DATA);
       setErr("(demo) usando dados locais, não consegui buscar no backend.");
     } finally { setLoading(false); }
-  }
+  }, [mode, token]);
 
   async function createItem(payload) {
     try {
-      const created = await jsonFetch(`${prefixFor(mode)}/quiz`, { method: "POST", body: payload, token });
-      return created?.id ? created : { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
+      const endpoint = listEndpointFor(mode);
+      const body = mode === "rest" ? toRestPayload(payload) : payload;
+      const created = await jsonFetch(endpoint, { method: "POST", body, token });
+      const normalizado = normalizeQuestion(created);
+      if (normalizado?.id != null) {
+        return normalizado;
+      }
+      const fallback = normalizeQuestion(payload) || payload;
+      const nextId = Math.max(0, ...items.map(i => i.id || 0)) + 1;
+      return { ...fallback, id: nextId };
     } catch {
-      return { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
+      const fallback = normalizeQuestion(payload) || payload;
+      const nextId = Math.max(0, ...items.map(i => i.id || 0)) + 1;
+      return { ...fallback, id: nextId };
     }
   }
 
   async function updateItem(id, payload) {
-    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "PUT", body: payload, token }); }
+    try {
+      const endpoint = itemEndpointFor(mode, id);
+      const body = mode === "rest" ? toRestPayload({ ...payload, id }) : payload;
+      await jsonFetch(endpoint, { method: "PUT", body, token });
+    }
     catch {}
   }
 
   async function removeItem(id) {
-    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "DELETE", token }); }
+    try {
+      const endpoint = itemEndpointFor(mode, id);
+      await jsonFetch(endpoint, { method: "DELETE", token });
+    }
     catch {}
     finally { setItems(prev => prev.filter(i => i.id !== id)); }
   }
 
-  useEffect(() => { load(); }, [mode]);
+  useEffect(() => { load(); }, [load]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();

@@ -2,6 +2,29 @@ import { useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import "./Login.css";
 
+const REST_API_BASE = "http://localhost:8080/api";
+const REST_LOGIN_ENDPOINT = `${REST_API_BASE}/usuario/login`;
+
+async function restLogin(email, password) {
+  const res = await fetch(REST_LOGIN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, senha: password }),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) {
+    const message = data?.message || data?.raw || text || "Falha no login REST.";
+    throw new Error(typeof message === "string" ? message : "Falha no login REST.");
+  }
+  return data;
+}
+
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPass] = useState("");
@@ -12,7 +35,7 @@ export default function Login() {
   const location = useLocation();
   const next = location.state?.from?.pathname || "/quiz";
 
-  function doLogin(mode) {
+  async function doLogin(mode) {
     setErr(""); setOk("");
 
     if (!email || !password) {
@@ -20,10 +43,29 @@ export default function Login() {
       return;
     }
 
-    
+    if (mode === "rest") {
+      try {
+        const user = await restLogin(email, password);
+        const guessedName = (user?.email || email).split("@")[0] || "Aluno(a)";
+        const tokenBase = user?.codigoUsuario ?? user?.id ?? email;
+
+        localStorage.setItem("token", `rest-${tokenBase}`);
+        localStorage.setItem("apiMode", mode);
+        localStorage.setItem("basePrefix", REST_API_BASE);
+        localStorage.setItem("userName", guessedName);
+
+        setOk(`Login realizado via ${mode.toUpperCase()}!`);
+        setTimeout(() => navigate(next, { replace: true }), 500);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Não foi possível autenticar via REST.";
+        setErr(message || "Não foi possível autenticar via REST.");
+      }
+      return;
+    }
+
     localStorage.setItem("token", "demo-token");
-  localStorage.setItem("apiMode", mode);              
-    localStorage.setItem("basePrefix", mode === "grpc" ? "/grpc" : "/rest");
+    localStorage.setItem("apiMode", mode);
+    localStorage.setItem("basePrefix", "/grpc");
 
     const guessedName = email.split("@")[0] || "Aluno(a)";
     localStorage.setItem("userName", guessedName);
