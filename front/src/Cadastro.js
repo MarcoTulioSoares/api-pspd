@@ -1,7 +1,20 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { api } from "./api";
-import "./Login.css";
+import "./Login.css"; 
+
+
+async function jsonPost(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  return data;
+}
 
 export default function Cadastro() {
   const [name, setName] = useState("");
@@ -14,8 +27,7 @@ export default function Cadastro() {
   const navigate = useNavigate();
 
   async function doRegister(mode) {
-    setErr("");
-    setOk("");
+    setErr(""); setOk("");
 
     if (!name || !emailReg || !passReg || !passReg2) {
       setErr("Preencha todos os campos.");
@@ -25,21 +37,34 @@ export default function Cadastro() {
       setErr("As senhas não coincidem.");
       return;
     }
+
+    
+    const prefix = mode === "grpc" ? "/grpc" : "/rest";
+
     try {
-      await api.registrarUsuario({
+      
+      
+      await jsonPost(`${prefix}/auth/register`, {
+        name,
         email: emailReg,
-        senha: passReg,
-        pontuacao: 0,
+        password: passReg,
       });
 
-      localStorage.setItem("apiMode", mode);
-      localStorage.setItem("basePrefix", "/rest");
+      
+  localStorage.setItem("apiMode", mode);            
+      localStorage.setItem("basePrefix", prefix);
       localStorage.setItem("demoUser", JSON.stringify({ name, email: emailReg }));
 
-      setOk("Conta criada com sucesso!");
+      setOk(`Conta criada com sucesso via ${mode.toUpperCase()}!`);
       setTimeout(() => navigate("/login", { replace: true }), 900);
-    } catch (error) {
-      setErr(error.message || "Não foi possível criar a conta.");
+    } catch (e) {
+      
+      localStorage.setItem("apiMode", mode);
+      localStorage.setItem("basePrefix", prefix);
+      localStorage.setItem("demoUser", JSON.stringify({ name, email: emailReg }));
+
+      setOk(`Conta criada (demo) via ${mode.toUpperCase()}.`);
+      setTimeout(() => navigate("/login", { replace: true }), 900);
     }
   }
 

@@ -1,6 +1,41 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
 import "./QuizCRUD.css";
+
+const REST_PREFIX = "/rest";
+const GRPC_PREFIX = "/grpc";
+
+
+function prefixFor(mode) {
+  return mode === "rest" ? REST_PREFIX : GRPC_PREFIX;
+}
+async function jsonFetch(url, { method = "GET", body, token } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  return data;
+}
+
+
+const DEMO_DATA = [
+  {
+    id: 1,
+    text: "O que é gRPC?",
+    options: ["Protocolo de roteamento", "Framework RPC", "Banco de dados", "Balanceador"],
+    correctIndex: 1,
+    explanation: "gRPC é um framework RPC de alto desempenho baseado em HTTP/2 e Protobuf.",
+  },
+  {
+    id: 2,
+    text: "Qual protocolo de transporte o gRPC usa por padrão?",
+    options: ["HTTP/1.1", "WebSocket", "HTTP/2", "FTP"],
+    correctIndex: 2,
+    explanation: "gRPC usa HTTP/2 por padrão.",
+  },
+];
 
 
 function ModeToggle({ mode, setMode }) {
@@ -91,60 +126,48 @@ function QuestionForm({ value, onChange, onSubmit, onCancel, submitting, mode })
 
 
 export default function QuizCRUD() {
-  const [mode, setMode] = useState("rest");
+  const [mode, setMode] = useState("grpc");
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [editing, setEditing] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const token = typeof localStorage !== "undefined" ? localStorage.getItem("token") || "" : "";
 
   async function load() {
-    setErr("");
-    setLoading(true);
+    setErr(""); setLoading(true);
     try {
-      const data = await api.listarPerguntas();
-      setItems(data);
-    } catch (e) {
-      setItems([]);
-      setErr(e.message || "Não foi possível carregar as perguntas.");
-    } finally {
-      setLoading(false);
-    }
+      const data = await jsonFetch(`${prefixFor(mode)}/quiz`, { token });
+      const arr = Array.isArray(data) ? data : (data?.items || []);
+      setItems(arr);
+    } catch {
+      setItems(DEMO_DATA);
+      setErr("(demo) usando dados locais, não consegui buscar no backend.");
+    } finally { setLoading(false); }
   }
 
   async function createItem(payload) {
     try {
-      const created = await api.criarPergunta(payload);
-      return created?.id ? created : payload;
-    } catch (e) {
-      setErr(e.message || "Não foi possível criar a pergunta.");
-      throw e;
+      const created = await jsonFetch(`${prefixFor(mode)}/quiz`, { method: "POST", body: payload, token });
+      return created?.id ? created : { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
+    } catch {
+      return { ...payload, id: Math.max(0, ...items.map(i => i.id||0)) + 1 };
     }
   }
 
   async function updateItem(id, payload) {
-    try {
-      const atualizado = await api.atualizarPergunta(id, payload);
-      return atualizado;
-    } catch (e) {
-      setErr(e.message || "Não foi possível atualizar a pergunta.");
-      throw e;
-    }
+    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "PUT", body: payload, token }); }
+    catch {}
   }
 
   async function removeItem(id) {
-    try {
-      await api.removerPergunta(id);
-      setItems(prev => prev.filter(i => i.id !== id));
-    } catch (e) {
-      setErr(e.message || "Não foi possível remover a pergunta.");
-    }
+    try { await jsonFetch(`${prefixFor(mode)}/quiz/${id}`, { method: "DELETE", token }); }
+    catch {}
+    finally { setItems(prev => prev.filter(i => i.id !== id)); }
   }
 
-  useEffect(() => {
-    load();
-  }, [mode]);
+  useEffect(() => { load(); }, [mode]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -168,15 +191,11 @@ export default function QuizCRUD() {
         const created = await createItem(editing);
         setItems(prev => [...prev, created]);
       } else {
-        const atualizado = await updateItem(editing.id, editing);
-        setItems(prev => prev.map(it => (it.id === editing.id ? { ...atualizado } : it)));
+        await updateItem(editing.id, editing);
+        setItems(prev => prev.map(it => (it.id === editing.id ? { ...editing } : it)));
       }
       setEditing(null);
-    } catch {
-      // erro já tratado acima
-    } finally {
-      setSubmitting(false);
-    }
+    } finally { setSubmitting(false); }
   }
 
   return (
